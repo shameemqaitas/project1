@@ -15,6 +15,7 @@ const Project = require('./Models/Project');
 const Activity = require('./Models/Activity');
 const Calendar = require('./Models/Calender');
 const nodemailer = require('nodemailer');
+const Marks = require('./Models/Marks');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -47,8 +48,8 @@ const upload = multer({ storage });
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'shameemqaitas@gmail.com', // Replace with your email
-    pass: 'mkroooqwtiwlqaqb',    // Replace with your App Password (not regular password)
+    user: 'shameem@qaitas.com', // Replace with your email
+    pass: 'zzeedmlxisozkves',    // Replace with your App Password (not regular password)
   },
 });
 
@@ -163,6 +164,18 @@ app.delete('/api/candidates/:id', async (req, res) => {
   }
 });
 
+// Delete a user (for clients)
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 // Update User Role
 // Update User Role
@@ -236,7 +249,6 @@ app.put('/api/projects/:projectId', async (req, res) => {
     const originalProject = await Project.findById(projectId);
     if (!originalProject) return res.status(404).json({ message: 'Project not found' });
 
-    // Check for duplicate companyName if provided
     if (updatedData.companyName && updatedData.companyName !== originalProject.companyName) {
       const existingProject = await Project.findOne({ companyName: updatedData.companyName });
       if (existingProject) {
@@ -244,21 +256,26 @@ app.put('/api/projects/:projectId', async (req, res) => {
       }
     }
 
-    // Handle selectedCandidates as an array
     if (updatedData.selectedCandidates) {
       if (!Array.isArray(updatedData.selectedCandidates)) {
         return res.status(400).json({ message: 'selectedCandidates must be an array' });
       }
-
-      // Initialize selectedCandidates if undefined
-      if (!originalProject.selectedCandidates) originalProject.selectedCandidates = [];
-
-      // Merge new candidates, avoiding duplicates
-      const currentCandidates = originalProject.selectedCandidates;
+      const currentCandidates = originalProject.selectedCandidates || [];
       const newCandidates = updatedData.selectedCandidates.filter(
         candidateId => !currentCandidates.includes(candidateId)
       );
       updatedData.selectedCandidates = [...currentCandidates, ...newCandidates];
+    }
+
+    if (updatedData.selectedClients) {
+      if (!Array.isArray(updatedData.selectedClients)) {
+        return res.status(400).json({ message: 'selectedClients must be an array' });
+      }
+      const currentClients = originalProject.selectedClients || [];
+      const newClients = updatedData.selectedClients.filter(
+        clientId => !currentClients.includes(clientId)
+      );
+      updatedData.selectedClients = [...currentClients, ...newClients];
     }
 
     const project = await Project.findByIdAndUpdate(
@@ -274,6 +291,16 @@ app.put('/api/projects/:projectId', async (req, res) => {
     } else {
       res.status(400).json({ message: error.message });
     }
+  }
+});
+
+
+app.get('/api/users/clients', async (req, res) => {
+  try {
+    const clients = await User.find({ role: 'Client' });
+    res.json(clients);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching clients', error: error.message });
   }
 });
 
@@ -382,6 +409,7 @@ app.delete('/api/projects/:projectId', async (req, res) => {
 });
 
 // Remove User from Project (Lead Assessor or Assessor)
+// Remove User from Project (Lead Assessor, Assessor, Client, or Candidate)
 app.put('/api/projects/:projectId/remove-user', async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -394,8 +422,8 @@ app.put('/api/projects/:projectId/remove-user', async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: 'Invalid user ID' });
     }
-    if (!role || !['Leadassessor', 'Assessor'].includes(role)) {
-      return res.status(400).json({ message: 'Role must be "Leadassessor" or "Assessor"' });
+    if (!role || !['Leadassessor', 'Assessor', 'Client', 'Candidate'].includes(role)) {
+      return res.status(400).json({ message: 'Role must be "Leadassessor", "Assessor", "Client", or "Candidate"' });
     }
 
     const project = await Project.findById(projectId);
@@ -403,7 +431,8 @@ app.put('/api/projects/:projectId/remove-user', async (req, res) => {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Remove user ID from the appropriate field
+    // Check if user exists in the respective project array and remove them
+    let removed = false;
     if (role === 'Leadassessor') {
       if (!project.selectedLeadassessor.includes(userId)) {
         return res.status(400).json({ message: 'User is not a lead assessor for this project' });
@@ -411,6 +440,7 @@ app.put('/api/projects/:projectId/remove-user', async (req, res) => {
       project.selectedLeadassessor = project.selectedLeadassessor.filter(
         id => id.toString() !== userId.toString()
       );
+      removed = true;
     } else if (role === 'Assessor') {
       if (!project.selectedAssessor.includes(userId)) {
         return res.status(400).json({ message: 'User is not an assessor for this project' });
@@ -418,11 +448,55 @@ app.put('/api/projects/:projectId/remove-user', async (req, res) => {
       project.selectedAssessor = project.selectedAssessor.filter(
         id => id.toString() !== userId.toString()
       );
+      removed = true;
+    } else if (role === 'Client') {
+      if (!project.selectedClients.includes(userId)) {
+        return res.status(400).json({ message: 'User is not a client for this project' });
+      }
+      project.selectedClients = project.selectedClients.filter(
+        id => id.toString() !== userId.toString()
+      );
+      removed = true;
+    } else if (role === 'Candidate') {
+      if (!project.selectedCandidates.includes(userId)) {
+        return res.status(400).json({ message: 'User is not a candidate for this project' });
+      }
+      project.selectedCandidates = project.selectedCandidates.filter(
+        id => id.toString() !== userId.toString()
+      );
+      // Also remove from candidateBatches if present
+      project.candidateBatches.forEach(batch => {
+        batch.candidates = batch.candidates.filter(
+          id => id.toString() !== userId.toString()
+        );
+      });
+      project.candidateBatches = project.candidateBatches.filter(batch => batch.candidates.length > 0);
+      removed = true;
     }
 
+    if (!removed) {
+      return res.status(400).json({ message: 'User not found in the specified role for this project' });
+    }
+
+    // Save the updated project
     await project.save();
 
-    res.status(200).json({ message: `${role} removed from project successfully`, project });
+    // Only delete the user from the User collection if role is Candidate or Client
+    if (role === 'Candidate' || role === 'Client') {
+      const deletedUser = await User.findByIdAndDelete(userId);
+      if (!deletedUser) {
+        return res.status(404).json({ message: 'User not found in User collection' });
+      }
+      res.status(200).json({ 
+        message: `${role} removed from project and deleted from users successfully`, 
+        project 
+      });
+    } else {
+      res.status(200).json({ 
+        message: `${role} removed from project successfully`, 
+        project 
+      });
+    }
   } catch (error) {
     console.error(`Error removing ${role} from project:`, error);
     res.status(500).json({ message: 'Internal Server Error', error: error.message });
@@ -446,6 +520,47 @@ app.get('/api/competencies/:competencyId', async (req, res) => {
     res.json({ competency });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Remove Competency from Project
+app.delete('/api/projects/:projectId/competencies/:competencyId', async (req, res) => {
+  try {
+    const { projectId, competencyId } = req.params;
+
+    // Validate inputs
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(competencyId)) {
+      return res.status(400).json({ message: 'Invalid competency ID' });
+    }
+
+    // Find the project
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Check if the competency exists in the project
+    const competencyIndex = project.competencies.findIndex(
+      id => id.toString() === competencyId.toString()
+    );
+    if (competencyIndex === -1) {
+      return res.status(400).json({ message: 'Competency not found in this project' });
+    }
+
+    // Remove the competency from the project's competencies array
+    project.competencies.splice(competencyIndex, 1);
+    await project.save();
+
+    res.status(200).json({ 
+      message: 'Competency removed from project successfully', 
+      project 
+    });
+  } catch (error) {
+    console.error('Error removing competency from project:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
   }
 });
 
@@ -516,21 +631,7 @@ app.put('/api/competencies/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/competencies/:id', async (req, res) => {
-  try {
-    const competency = await Competency.findByIdAndDelete(req.params.id);
-    if (!competency) return res.status(404).json({ message: 'Competency not found' });
 
-    await Project.updateMany(
-      { competencies: competency._id },
-      { $pull: { competencies: competency._id } }
-    );
-
-    res.json({ message: 'Competency deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
 
 app.post('/api/projects/:projectId/competencies', async (req, res) => {
   try {
@@ -646,19 +747,44 @@ app.put('/api/skillsets/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/skillsets/:id', async (req, res) => {
+// Remove Skillset from Competency
+app.delete('/api/competencies/:competencyId/skillsets/:skillsetId', async (req, res) => {
   try {
-    const skillset = await Skillset.findByIdAndDelete(req.params.id);
-    if (!skillset) return res.status(404).json({ message: 'Skillset not found' });
+    const { competencyId, skillsetId } = req.params;
 
-    await Competency.updateMany(
-      { skillsets: skillset._id },
-      { $pull: { skillsets: skillset._id } }
+    // Validate inputs
+    if (!mongoose.Types.ObjectId.isValid(competencyId)) {
+      return res.status(400).json({ message: 'Invalid competency ID' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(skillsetId)) {
+      return res.status(400).json({ message: 'Invalid skillset ID' });
+    }
+
+    // Find the competency
+    const competency = await Competency.findById(competencyId);
+    if (!competency) {
+      return res.status(404).json({ message: 'Competency not found' });
+    }
+
+    // Check if the skillset exists in the competency
+    const skillsetIndex = competency.skillsets.findIndex(
+      id => id.toString() === skillsetId.toString()
     );
+    if (skillsetIndex === -1) {
+      return res.status(400).json({ message: 'Skillset not found in this competency' });
+    }
 
-    res.json({ message: 'Skillset deleted successfully' });
+    // Remove the skillset from the competency's skillsets array
+    competency.skillsets.splice(skillsetIndex, 1);
+    await competency.save();
+
+    res.status(200).json({ 
+      message: 'Skillset removed from competency successfully', 
+      competency 
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Error removing skillset from competency:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
   }
 });
 
@@ -936,13 +1062,15 @@ app.post('/api/activities', async (req, res) => {
 });
 
 // In your Express app
-app.get('/api/users', async (req, res) => {
+// server.js
+app.get('/api/users/:id', async (req, res) => {
   try {
-    const users = await User.find();
-    res.status(200).json({ users });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
   } catch (error) {
-    console.error('Error fetching all users:', error);
-    res.status(500).json({ message: 'Error fetching users', error: error.message });
+    console.error('Error fetching user:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
@@ -1162,11 +1290,14 @@ app.put('/api/tests/:id/attend', async (req, res) => {
       return res.status(404).json({ message: 'Test not found' });
     }
 
-    if (test.attendees.includes(candidateId)) {
-      return res.status(400).json({ message: 'You have already attended this activity' });
+    const candidateObjectId = new mongoose.Types.ObjectId(candidateId);
+    const existingAttendee = test.attendees.find(att => att.candidate.equals(candidateObjectId));
+    if (!existingAttendee) {
+      test.attendees.push({ candidate: candidateObjectId, startTime: new Date() });
     }
-
-    test.attendees.push(candidateId);
+    if (!test.attended.some(id => id.equals(candidateObjectId))) {
+      test.attended.push(candidateObjectId);
+    }
     await test.save();
 
     res.status(200).json({ message: 'Attendance marked successfully', test });
@@ -1176,22 +1307,80 @@ app.put('/api/tests/:id/attend', async (req, res) => {
   }
 });
 
+app.put('/api/tests/:id/leave', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { candidateId, remainingTime } = req.body;
+
+    if (!candidateId) {
+      return res.status(400).json({ message: 'Candidate ID is required' });
+    }
+
+    const test = await Test.findById(id);
+    if (!test) {
+      return res.status(404).json({ message: 'Test not found' });
+    }
+
+    const candidateObjectId = new mongoose.Types.ObjectId(candidateId);
+    const attendeeIndex = test.attendees.findIndex(att => 
+      att.candidate.equals(candidateObjectId)
+    );
+
+    if (attendeeIndex === -1) {
+      return res.status(404).json({ message: 'Candidate not found in attendees' });
+    }
+
+    // Update the remainingTime for this attendee
+    if (remainingTime !== undefined) {
+      test.attendees[attendeeIndex].remainingTime = remainingTime;
+    }
+
+    // Optionally, you could mark them as "left" without removing them
+    // test.attendees[attendeeIndex].status = 'offline'; // If you add a status field
+
+    await test.save();
+
+    res.status(200).json({ 
+      message: 'Candidate timer updated', 
+      test 
+    });
+  } catch (error) {
+    console.error('Error updating candidate timer:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
 
 // Updated Send Invitations Endpoint
 app.post('/api/register', upload.single('cv'), async (req, res) => {
   try {
-    const { name, age, company, email, countryCode, phone, password, role } = req.body;
+    const { name, age, company, email, countryCode, phone, password, role, projectId } = req.body;
     const cv = req.file ? req.file.path : undefined;
 
-    if (!password) {
-      return res.status(400).json({ message: 'Password is required' });
+    if (!name || !email || !countryCode || !phone || !password) {
+      return res.status(400).json({ message: 'Name, email, country code, phone, and password are required' });
+    }
+
+    const validRoles = ['Candidate', 'Assessor', 'Leadassessor', 'Admin', 'Client'];
+    if (role && !validRoles.includes(role)) {
+      return res.status(400).json({ message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
     }
 
     const existingUser = await User.findOne({ email });
     if (existingUser) return res.status(400).json({ message: 'User already exists' });
 
-    const user = new User({ name, age, company, email, countryCode, phone, password, role, cv });
+    const user = new User({ name, age, company, email, countryCode, phone, password, role: role || 'Candidate', cv });
     await user.save();
+
+    // If projectId is provided and role is 'Client', add to selectedClients
+    if (projectId && role === 'Client') {
+      const project = await Project.findById(projectId);
+      if (!project) return res.status(404).json({ message: 'Project not found' });
+      if (!project.selectedClients.includes(user._id)) {
+        project.selectedClients.push(user._id);
+        await project.save();
+      }
+    }
 
     res.status(201).json({ message: 'User registered successfully', user });
   } catch (error) {
@@ -1225,9 +1414,18 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
     }
 
     const notifications = [];
-    const loginLink = 'http://localhost:3000/login';
+    const loginLink = 'http://localhost:3000/';
 
-    for (const invitee of invitees) {
+    // Add clients to the invitees list if not already included
+    const allInvitees = [
+      ...(project.selectedLeadassessor || []).map(id => ({ id, role: 'Leadassessor' })),
+      ...(project.selectedAssessor || []).map(id => ({ id, role: 'Assessor' })),
+      ...(project.selectedCandidates || []).map(id => ({ id, role: 'Candidate' })),
+      ...(project.selectedClients || []).map(id => ({ id, role: 'Client' })),
+      ...invitees,
+    ];
+
+    for (const invitee of allInvitees) {
       let user;
       let passwordToSend;
 
@@ -1237,29 +1435,27 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
           console.warn(`User not found: ${invitee.id}, skipping`);
           continue;
         }
-        // Use the existing password instead of generating a new one
-        passwordToSend = user.password; // Plain text password from DB
+        passwordToSend = user.password;
       } else if (invitee.email) {
         user = await User.findOne({ email: invitee.email });
         if (!user && invitee.email) {
-          // If user doesn’t exist, require a password from the request or fail
           if (!invitee.password) {
             console.warn(`No password provided for new user ${invitee.email}, skipping`);
             continue;
           }
-          passwordToSend = invitee.password; // Use provided password
+          passwordToSend = invitee.password;
           user = new User({
             email: invitee.email,
             name: invitee.name || 'User',
-            password: passwordToSend, // Store plain text
+            password: passwordToSend,
             role: invitee.role || 'Candidate',
-            countryCode: '+971', // Default value
-            phone: `000${Math.floor(1000000 + Math.random() * 9000000)}`, // Dummy phone
-            age: '30', // Default value
+            countryCode: '+971',
+            phone: `000${Math.floor(1000000 + Math.random() * 9000000)}`,
+            age: '30',
           });
           await user.save();
         } else if (user) {
-          passwordToSend = user.password; // Use existing password
+          passwordToSend = user.password;
         }
       }
 
@@ -1305,7 +1501,7 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
       });
 
       const mailOptions = {
-        from: 'shameemqaitas@gmail.com',
+        from: 'shameem@qaitas.com',
         to: user.email,
         subject: `Invitation to ${project.projectName || 'Unnamed Project'}`,
         html: `
@@ -1368,14 +1564,15 @@ app.get('/api/projects/:projectId/full-details', async (req, res) => {
     const project = await Project.findById(req.params.projectId)
       .populate('selectedLeadassessor', 'name email role')
       .populate('selectedAssessor', 'name email role')
-      .populate('selectedCandidates', 'name email role')
-      .populate('candidateBatches.candidates', 'name email role')
+      .populate('selectedCandidates', 'name email role countryCode phone age company') // Updated
+      .populate('selectedClients', 'name email role')
+      .populate('candidateBatches.candidates', 'name email role countryCode phone age company') // Updated for consistency
       .populate('groups.assessor', 'name email role')
-      .populate('groups.candidates', 'name email role')
+      .populate('groups.candidates', 'name email role countryCode phone age company') // Updated for consistency
       .populate({ path: 'tests' })
       .populate({
         path: 'competencies',
-        populate: { path: 'skillsets', populate: { path: 'questions' } }
+        populate: { path: 'skillsets', populate: { path: 'questions' } },
       });
 
     if (!project) {
@@ -1461,10 +1658,14 @@ app.get("/api/projects/assessor/:userId", async (req, res) => {
 app.get('/api/tests/:testId', async (req, res) => {
   try {
     const test = await Test.findById(req.params.testId)
-      .populate('attendees', 'name email role');
+      .populate('attendees.candidate', 'name email role')
+      .populate('attended', 'name email role');
     if (!test) {
       return res.status(404).json({ message: 'Test not found' });
     }
+    // Ensure no null entries from failed population
+    test.attendees = test.attendees.filter(a => a.candidate);
+    test.attended = test.attended.filter(a => a);
     res.status(200).json({ test });
   } catch (error) {
     console.error('Error fetching test details:', error);
@@ -1472,55 +1673,169 @@ app.get('/api/tests/:testId', async (req, res) => {
   }
 });
 
-// Fetch Notifications by Project ID
+// POST /api/questions/marks - Save marks to Marks collection
+app.post('/api/questions/marks', async (req, res) => {
+  const { projectId, skillsetId, marks, userId } = req.body;
 
+  if (!projectId || !skillsetId || !marks || !userId) {
+    return res.status(400).json({ message: 'Missing required fields' });
+  }
 
-// Confirm Notification (Accept Invitation)
-// app.put('/api/notifications/:id/confirm', async (req, res) => {
-//   const { id } = req.params;
-//   try {
-//     const notification = await Notification.findById(id).populate('recipientId', 'role');
-//     if (!notification) return res.status(404).json({ message: 'Notification not found' });
+  try {
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
 
-//     notification.status = 'accepted';
-//     await notification.save();
+    // Verify assessor authorization (optional)
+    const isAssessor = project.groups.some(group => group.assessor.toString() === userId);
+    if (!isAssessor) {
+      return res.status(403).json({ message: 'Unauthorized: Not an assessor for this project' });
+    }
 
-//     const project = await Project.findById(notification.projectId);
-//     if (!project) return res.status(404).json({ message: 'Project not found' });
+    // Check if marks already exist for this project, skillset, and assessor
+    let markDoc = await Marks.findOne({ projectId, skillsetId, assessorId: userId });
+    if (markDoc) {
+      // Update existing marks
+      markDoc.marks = marks;
+      markDoc.updatedAt = Date.now();
+    } else {
+      // Create new marks document
+      markDoc = new Marks({
+        projectId,
+        skillsetId,
+        assessorId: userId,
+        marks,
+      });
+    }
 
-//     if (notification.recipientId.role === 'Leadassessor') {
-//       project.pendingLeadAssessors = project.pendingLeadAssessors.filter(
-//         userId => userId.toString() !== notification.recipientId._id.toString()
-//       );
-//       if (!project.selectedLeadassessor.includes(notification.recipientId._id)) {
-//         project.selectedLeadassessor.push(notification.recipientId._id);
-//       }
-//       await project.save();
-//     }
+    await markDoc.save();
+    res.status(200).json({ message: 'Marks saved successfully' });
+  } catch (error) {
+    console.error('Error saving marks:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
-//     res.status(200).json({ message: 'Invitation accepted', project });
-//   } catch (error) {
-//     console.error('Error confirming notification:', error);
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
+app.get('/api/marks/project/:projectId', async (req, res) => {
+  const { projectId } = req.params;
 
-// // Reject Notification
-// app.put('/api/notifications/:id/reject', async (req, res) => {
-//   const { id } = req.params;
-//   try {
-//     const notification = await Notification.findById(id);
-//     if (!notification) return res.status(404).json({ message: 'Notification not found' });
+  try {
+    const marksDocs = await Marks.find({ projectId }).populate('assessorId', 'name');
+    if (!marksDocs.length) {
+      return res.status(404).json({ message: 'No marks found for this project' });
+    }
 
-//     notification.status = 'rejected';
-//     await notification.save();
+    // Fetch all questions
+    const questions = await Question.find({});
+    const questionMap = new Map(questions.map(q => [q._id.toString(), { question: q.question, questionArabic: q.questionArabic }]));
 
-//     res.status(200).json({ message: 'Invitation rejected' });
-//   } catch (error) {
-//     console.error('Error rejecting notification:', error);
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
+    // Extract all candidate IDs from marks
+    const candidateIds = new Set();
+    marksDocs.forEach(doc => {
+      const marksMap = doc.marks instanceof Map ? doc.marks : new Map(Object.entries(doc.marks));
+      for (const [, candidateMarks] of marksMap.entries()) {
+        const innerMap = candidateMarks instanceof Map ? candidateMarks : new Map(Object.entries(candidateMarks));
+        for (const [candidateId] of innerMap.entries()) {
+          candidateIds.add(candidateId);
+        }
+      }
+    });
+
+    // Fetch candidate names
+    const candidates = await User.find({ _id: { $in: Array.from(candidateIds) } }, 'name');
+    const candidateMap = new Map(candidates.map(c => [c._id.toString(), c.name]));
+
+    // Process marks data
+    const results = marksDocs.map(doc => {
+      const marksArray = [];
+      const marksMap = doc.marks instanceof Map ? doc.marks : new Map(Object.entries(doc.marks));
+      for (const [questionId, candidateMarks] of marksMap.entries()) {
+        const innerMap = candidateMarks instanceof Map ? candidateMarks : new Map(Object.entries(candidateMarks));
+        for (const [candidateId, mark] of innerMap.entries()) {
+          const questionData = questionMap.get(questionId) || { question: 'Unknown', questionArabic: 'غير معروف' };
+          marksArray.push({
+            questionId,
+            question: questionData.question,
+            questionArabic: questionData.questionArabic,
+            candidateId,
+            candidateName: candidateMap.get(candidateId) || 'Unknown',
+            mark,
+            assessorId: doc.assessorId._id.toString(),
+            assessorName: doc.assessorId.name || 'Unknown',
+            skillsetId: doc.skillsetId.toString()
+          });
+        }
+      }
+      return { projectId: doc.projectId, marks: marksArray };
+    });
+
+    res.status(200).json(results);
+  } catch (error) {
+    console.error('Error fetching project marks:', error.stack);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Add this route
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.find();
+    res.status(200).json(users);
+  } catch (error) {
+    console.error('Error fetching all users:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Existing notifications endpoint (already added previously)
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const notifications = await Notification.find()
+      .populate('projectId', 'projectName')
+      .populate('recipientId', 'name email role');
+    res.status(200).json(notifications);
+  } catch (error) {
+    console.error('Error fetching all notifications:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+app.post('/api/register/admin', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    // Validate input
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Email already registered' });
+    }
+
+    // Hash password (assuming you’re using bcrypt)
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create new admin user
+    const newAdmin = new User({
+      name,
+      email,
+      password: hashedPassword,
+      role: 'Admin', // Set role to 'admin'
+    });
+
+    await newAdmin.save();
+    res.status(201).json({ message: 'Admin registered successfully', user: { id: newAdmin._id, name, email, role: 'admin' } });
+  } catch (error) {
+    console.error('Error registering admin:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 
 
 // Root Route
@@ -1532,3 +1847,4 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
+

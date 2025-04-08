@@ -16,6 +16,7 @@ const projectSchema = new Schema({
   pendingLeadAssessors: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   selectedAssessor: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   selectedCandidates: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  selectedClients: [{ type: Schema.Types.ObjectId, ref: 'User' }], // Added clients field
   candidateBatches: [{
     batchName: { type: String, required: true },
     candidates: [{ type: Schema.Types.ObjectId, ref: 'User' }],

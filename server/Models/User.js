@@ -7,8 +7,8 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   countryCode: { type: String, required: true },
   phone: { type: String, required: true, unique: true },
-  password: { type: String, required: true }, // Password stored as plain text
-  role: { type: String, enum: ['Candidate', 'Assessor', 'Leadassessor', 'Admin'], default: 'Candidate' },
+  password: { type: String, required: true },
+  role: { type: String, enum: ['Candidate', 'Assessor', 'Leadassessor', 'Admin', 'Client'], default: 'Candidate' },
   cv: { type: String },
 });
 

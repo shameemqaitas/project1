@@ -1,17 +1,25 @@
+// Models/Test.js
 const mongoose = require('mongoose');
 
-const testSchema = new mongoose.Schema({
+const TestSchema = new mongoose.Schema({
   testName: { type: String, required: true },
   activityType: { type: String, required: true },
   description: String,
   date: { type: String, required: true },
   time: { type: String, required: true },
-  prepare: { type: Number, required: true },
+  prepare: { type: Number, required: true }, // Preparation time in minutes
   present: { type: Number, required: true },
   require: { type: String, required: true },
   expect: { type: String, required: true },
   testpaper: { type: String, required: true },
-  attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // New field
-});
+  attendees: [
+    {
+      candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      startTime: { type: Date, default: Date.now }, // When they joined
+      remainingTime: { type: Number, default: null } // Remaining time in seconds
+    },
+  ],
+  attended: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+}, { timestamps: true });
 
-module.exports = mongoose.model('Test', testSchema);
+module.exports = mongoose.model('Test', TestSchema);
