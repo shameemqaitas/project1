@@ -13,7 +13,6 @@ const projectSchema = new Schema({
   tests: [{ type: Schema.Types.ObjectId, ref: 'Test' }],
   testId: { type: Schema.Types.ObjectId, ref: 'Test' },
   selectedLeadassessor: [{ type: Schema.Types.ObjectId, ref: 'User', required: true }],
-  pendingLeadAssessors: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   selectedAssessor: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   selectedCandidates: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   selectedClients: [{ type: Schema.Types.ObjectId, ref: 'User' }], // Added clients field

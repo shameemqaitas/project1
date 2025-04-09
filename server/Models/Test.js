@@ -5,8 +5,8 @@ const TestSchema = new mongoose.Schema({
   testName: { type: String, required: true },
   activityType: { type: String, required: true },
   description: String,
-  date: { type: String, required: true },
-  time: { type: String, required: true },
+  date: { type: String, },
+  time: { type: String,  },
   prepare: { type: Number, required: true }, // Preparation time in minutes
   present: { type: Number, required: true },
   require: { type: String, required: true },

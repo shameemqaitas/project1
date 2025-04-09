@@ -19,6 +19,7 @@ const Marks = require('./Models/Marks');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
+const moment = require('moment');
 
 // MongoDB Connection
 const connectDB = async () => {
@@ -49,7 +50,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'shameem@qaitas.com', // Replace with your email
-    pass: 'zzeedmlxisozkves',    // Replace with your App Password (not regular password)
+    pass: 'itlckoqaiqatuieg',    // Replace with your App Password (not regular password)
   },
 });
 
@@ -129,6 +130,7 @@ app.get('/api/assessors', async (req, res) => {
 });
 
 // Delete Candidate
+// Keep this endpoint for admin deletion outside project context if needed
 app.delete('/api/candidates/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -481,22 +483,10 @@ app.put('/api/projects/:projectId/remove-user', async (req, res) => {
     // Save the updated project
     await project.save();
 
-    // Only delete the user from the User collection if role is Candidate or Client
-    if (role === 'Candidate' || role === 'Client') {
-      const deletedUser = await User.findByIdAndDelete(userId);
-      if (!deletedUser) {
-        return res.status(404).json({ message: 'User not found in User collection' });
-      }
-      res.status(200).json({ 
-        message: `${role} removed from project and deleted from users successfully`, 
-        project 
-      });
-    } else {
-      res.status(200).json({ 
-        message: `${role} removed from project successfully`, 
-        project 
-      });
-    }
+    res.status(200).json({ 
+      message: `${role} removed from project successfully`, 
+      project 
+    });
   } catch (error) {
     console.error(`Error removing ${role} from project:`, error);
     res.status(500).json({ message: 'Internal Server Error', error: error.message });
@@ -938,17 +928,16 @@ app.post('/api/tests', upload.none(), async (req, res) => {
 
     console.log('Received data:', req.body);
 
-    if (!testName || !activityType || !date || !time || !prepare || !present ||
-        !require || !expect || !testpaper || !projectId) {
-      return res.status(400).json({ message: 'All required fields, including projectId, must be provided' });
+    if (!testName || !activityType || !prepare || !present || !require || !expect || !testpaper || !projectId) {
+      return res.status(400).json({ message: 'All required fields (except date and time) must be provided' });
     }
 
     const newTest = new Test({
       testName,
       activityType,
       description,
-      date,
-      time,
+      date: date || null, // Default to null if not provided
+      time: time || null, // Default to null if not provided
       prepare: parseInt(prepare),
       present: parseInt(present),
       require,
@@ -1268,11 +1257,24 @@ app.put('/api/projects/:projectId/add-user-notification', async (req, res) => {
 app.put('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { email } = req.body;
+
+    if (email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: id } });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already in use by another user' });
+      }
+    }
+
     const updatedUser = await User.findByIdAndUpdate(id, req.body, { new: true });
     if (!updatedUser) return res.status(404).json({ message: 'User not found' });
     res.json(updatedUser);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    if (error.code === 11000) {
+      res.status(400).json({ message: 'Email already in use' });
+    } else {
+      res.status(500).json({ message: error.message });
+    }
   }
 });
 
@@ -1366,26 +1368,65 @@ app.post('/api/register', upload.single('cv'), async (req, res) => {
       return res.status(400).json({ message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'User already exists' });
+    // Check if user already exists by email (since email is unique globally)
+    let user = await User.findOne({ email });
 
-    const user = new User({ name, age, company, email, countryCode, phone, password, role: role || 'Candidate', cv });
-    await user.save();
+    if (user) {
+      // User exists; verify role consistency and update if necessary
+      if (role && user.role !== role) {
+        return res.status(400).json({ message: `User with this email exists with a different role: ${user.role}. Cannot change role.` });
+      }
+      // Update fields if provided (except password, unless explicitly allowed)
+      user.name = name || user.name;
+      user.age = age || user.age;
+      user.company = company || user.company;
+      user.countryCode = countryCode || user.countryCode;
+      user.phone = phone || user.phone;
+      if (cv) user.cv = cv;
+      await user.save();
+    } else {
+      // Create new user if no existing user found
+      user = new User({
+        name,
+        age,
+        company,
+        email,
+        countryCode,
+        phone,
+        password,
+        role: role || 'Candidate',
+        cv,
+      });
+      await user.save();
+    }
 
-    // If projectId is provided and role is 'Client', add to selectedClients
-    if (projectId && role === 'Client') {
+    // Add user to project if projectId is provided (for Candidates or Clients)
+    if (projectId && (role === 'Candidate' || role === 'Client')) {
+      if (!mongoose.Types.ObjectId.isValid(projectId)) {
+        return res.status(400).json({ message: 'Invalid project ID' });
+      }
       const project = await Project.findById(projectId);
-      if (!project) return res.status(404).json({ message: 'Project not found' });
-      if (!project.selectedClients.includes(user._id)) {
-        project.selectedClients.push(user._id);
+      if (!project) {
+        return res.status(404).json({ message: 'Project not found' });
+      }
+      const targetField = role === 'Candidate' ? 'selectedCandidates' : 'selectedClients';
+      if (!project[targetField].includes(user._id)) {
+        project[targetField].push(user._id);
         await project.save();
       }
     }
 
-    res.status(201).json({ message: 'User registered successfully', user });
+    res.status(201).json({ 
+      message: user.isNew ? 'User created and registered successfully' : 'Existing user added to project successfully', 
+      user 
+    });
   } catch (error) {
     console.error('❌ Error registering user:', error);
-    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+    if (error.code === 11000) {
+      res.status(400).json({ message: 'Email already registered' });
+    } else {
+      res.status(500).json({ message: 'Internal Server Error', error: error.message });
+    }
   }
 });
 
@@ -1833,6 +1874,49 @@ app.post('/api/register/admin', async (req, res) => {
   } catch (error) {
     console.error('Error registering admin:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// DELETE /api/notifications/:notificationId/schedule - Delete a specific schedule from a notification
+app.delete('/api/notifications/:notificationId/schedule', async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const { eventDate, eventTime } = req.body;
+
+    console.log('Delete Request Body:', { notificationId, eventDate, eventTime }); // Debug log
+
+    if (!eventDate || !eventTime) {
+      return res.status(400).json({ message: 'eventDate and eventTime are required' });
+    }
+
+    const notification = await Notification.findById(notificationId);
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification not found' });
+    }
+
+    console.log('Existing Schedules:', notification.schedules); // Debug log
+
+    const scheduleIndex = notification.schedules.findIndex((s) => {
+      const formattedEventDate = moment(s.eventDate).format('YYYY-MM-DD');
+      const formattedReqDate = moment(eventDate).format('YYYY-MM-DD');
+      const timeMatch = s.eventTime === eventTime;
+      console.log(`Comparing: ${formattedEventDate} === ${formattedReqDate} && ${s.eventTime} === ${eventTime}`); // Debug log
+      return formattedEventDate === formattedReqDate && timeMatch;
+    });
+
+    if (scheduleIndex === -1) {
+      return res.status(404).json({ message: 'Schedule not found in this notification' });
+    }
+
+    notification.schedules.splice(scheduleIndex, 1);
+    await notification.save();
+
+    console.log('Updated Notification:', notification); // Debug log
+
+    res.status(200).json({ message: 'Schedule deleted successfully', notification });
+  } catch (error) {
+    console.error('Error deleting schedule:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
   }
 });
 
