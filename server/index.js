@@ -13,7 +13,7 @@ const Behaviour = require('./Models/Behaviour');
 const Question = require('./Models/Question');
 const Project = require('./Models/Project');
 const Activity = require('./Models/Activity');
-const Calendar = require('./Models/Calender');
+const Calendar = require('./Models/Calendar');
 const nodemailer = require('nodemailer');
 const Marks = require('./Models/Marks');
 const app = express();
@@ -1156,17 +1156,60 @@ app.put('/api/notifications/:notificationId/confirm', async (req, res) => {
   }
 });
 
+// app.post('/api/calendar', async (req, res) => {
+//   try {
+//     const { userId, projectId, eventDate, eventTime, title } = req.body;
+
+//     // Validate input
+//     if (!userId || !projectId || !eventDate || !eventTime || !title) {
+//       return res.status(400).json({ message: 'All fields (userId, projectId, eventDate, eventTime, title) are required' });
+//     }
+
+//     if (!mongoose.Types.ObjectId.isValid(userId)) {
+//       return res.status(400).json({ message: 'Invalid user ID' });
+//     }
+//     if (!mongoose.Types.ObjectId.isValid(projectId)) {
+//       return res.status(400).json({ message: 'Invalid project ID' });
+//     }
+
+//     const user = await User.findById(userId);
+//     if (!user) {
+//       return res.status(404).json({ message: 'User not found' });
+//     }
+
+//     const project = await Project.findById(projectId);
+//     if (!project) {
+//       return res.status(404).json({ message: 'Project not found' });
+//     }
+
+//     const calendarEvent = new Calendar({
+//       userId,
+//       projectId,
+//       eventDate: new Date(eventDate), // Ensure valid Date object
+//       eventTime,
+//       title
+//     });
+
+//     await calendarEvent.save();
+
+//     res.status(201).json({ message: 'Calendar event created successfully', event: calendarEvent });
+//   } catch (error) {
+//     console.error('Error creating calendar event:', error);
+//     res.status(500).json({ message: 'Internal Server Error', error: error.message });
+//   }
+// });
+
 // Get Calendar Events for a User (New Endpoint)
-app.get('/api/calendar/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const events = await Calendar.find({ userId }).populate('projectId', 'projectName');
-    res.status(200).json(events);
-  } catch (error) {
-    console.error('Error fetching calendar events:', error);
-    res.status(500).json({ message: 'Internal Server Error', error: error.message });
-  }
-});
+// app.get('/api/calendar/:userId', async (req, res) => {
+//   try {
+//     const { userId } = req.params;
+//     const events = await Calendar.find({ userId }).populate('projectId', 'projectName');
+//     res.status(200).json(events);
+//   } catch (error) {
+//     console.error('Error fetching calendar events:', error);
+//     res.status(500).json({ message: 'Internal Server Error', error: error.message });
+//   }
+// });
 
 // Reject Lead Assessor (Optional)
 app.put('/api/notifications/:notificationId/reject', async (req, res) => {
@@ -1368,37 +1411,28 @@ app.post('/api/register', upload.single('cv'), async (req, res) => {
       return res.status(400).json({ message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
     }
 
-    // Check if user already exists by email (since email is unique globally)
-    let user = await User.findOne({ email });
-
+    // Check if user already exists by email
+    const user = await User.findOne({ email });
     if (user) {
-      // User exists; verify role consistency and update if necessary
-      if (role && user.role !== role) {
-        return res.status(400).json({ message: `User with this email exists with a different role: ${user.role}. Cannot change role.` });
-      }
-      // Update fields if provided (except password, unless explicitly allowed)
-      user.name = name || user.name;
-      user.age = age || user.age;
-      user.company = company || user.company;
-      user.countryCode = countryCode || user.countryCode;
-      user.phone = phone || user.phone;
-      if (cv) user.cv = cv;
-      await user.save();
-    } else {
-      // Create new user if no existing user found
-      user = new User({
-        name,
-        age,
-        company,
-        email,
-        countryCode,
-        phone,
-        password,
-        role: role || 'Candidate',
-        cv,
+      // If user exists, return a message without updating
+      return res.status(409).json({ 
+        message: `User with email ${email} already exists.` 
       });
-      await user.save();
     }
+
+    // Create new user if no existing user found
+    const newUser = new User({
+      name,
+      age,
+      company,
+      email,
+      countryCode,
+      phone,
+      password,
+      role: role || 'Candidate',
+      cv,
+    });
+    await newUser.save();
 
     // Add user to project if projectId is provided (for Candidates or Clients)
     if (projectId && (role === 'Candidate' || role === 'Client')) {
@@ -1410,15 +1444,15 @@ app.post('/api/register', upload.single('cv'), async (req, res) => {
         return res.status(404).json({ message: 'Project not found' });
       }
       const targetField = role === 'Candidate' ? 'selectedCandidates' : 'selectedClients';
-      if (!project[targetField].includes(user._id)) {
-        project[targetField].push(user._id);
+      if (!project[targetField].includes(newUser._id)) {
+        project[targetField].push(newUser._id);
         await project.save();
       }
     }
 
     res.status(201).json({ 
-      message: user.isNew ? 'User created and registered successfully' : 'Existing user added to project successfully', 
-      user 
+      message: 'User created and registered successfully', 
+      user: newUser 
     });
   } catch (error) {
     console.error('❌ Error registering user:', error);
@@ -1454,10 +1488,31 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
       return res.status(400).json({ message: 'No activity schedules provided' });
     }
 
+    // Validate and normalize schedules
+    const formattedSchedules = schedules.map((schedule, index) => {
+      const { eventDate, eventTime } = schedule;
+
+      if (!eventDate || !eventTime) {
+        throw new Error(`Schedule at index ${index} is missing eventDate or eventTime`);
+      }
+
+      // Ensure eventDate is a string in "YYYY-MM-DD" format
+      const dateStr = typeof eventDate === 'string' ? eventDate : eventDate.toString().slice(0, 10);
+      if (!moment(dateStr, 'YYYY-MM-DD', true).isValid()) {
+        throw new Error(`Invalid eventDate format at index ${index}: ${eventDate}`);
+      }
+
+      // Ensure eventTime is a string in "HH:mm" format
+      if (!moment(eventTime, 'HH:mm', true).isValid()) {
+        throw new Error(`Invalid eventTime format at index ${index}: ${eventTime}`);
+      }
+
+      return { eventDate: dateStr, eventTime };
+    });
+
     const notifications = [];
     const loginLink = 'http://localhost:3000/';
 
-    // Add clients to the invitees list if not already included
     const allInvitees = [
       ...(project.selectedLeadassessor || []).map(id => ({ id, role: 'Leadassessor' })),
       ...(project.selectedAssessor || []).map(id => ({ id, role: 'Assessor' })),
@@ -1523,17 +1578,20 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
         recipientId: user._id,
         projectId,
         message,
-        schedules: schedules.map(s => ({
-          eventDate: new Date(s.eventDate),
+        schedules: formattedSchedules.map(s => ({
+          eventDate: new Date(`${s.eventDate}T${s.eventTime}:00`),
           eventTime: s.eventTime,
         })),
         status: 'pending',
       });
       await notification.save();
 
-      const googleCalendarLinks = schedules.map(schedule => {
+      const googleCalendarLinks = formattedSchedules.map(schedule => {
         const startDate = new Date(`${schedule.eventDate}T${schedule.eventTime}:00`);
-        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+        if (isNaN(startDate.getTime())) {
+          throw new Error(`Invalid date constructed: ${schedule.eventDate}T${schedule.eventTime}:00`);
+        }
+        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 1 hour duration
         const startUTC = startDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
         const endUTC = endDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
         const eventTitle = encodeURIComponent(`${roleText} Meeting for ${project.projectName || 'Unnamed Project'}`);
@@ -1554,9 +1612,9 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
           <p><strong>Login Here:</strong> <a href="${loginLink}">${loginLink}</a></p>
           <p><strong>Event Schedule:</strong></p>
           <ul>
-            ${schedules.map((s, index) => `
+            ${formattedSchedules.map((s, index) => `
               <li>
-                ${new Date(s.eventDate).toLocaleDateString()} at ${s.eventTime}
+                ${new Date(`${s.eventDate}T${s.eventTime}:00`).toLocaleDateString()} at ${s.eventTime}
                 <a href="${googleCalendarLinks[index]}" target="_blank">Add to Google Calendar</a>
               </li>
             `).join('')}
@@ -1920,6 +1978,146 @@ app.delete('/api/notifications/:notificationId/schedule', async (req, res) => {
   }
 });
 
+// Create or Update Calendar Entry
+// Replace existing calendar routes with these
+
+// Create or Update Calendar Entry
+app.post('/api/calendar', async (req, res) => {
+  try {
+    const { projectId, title, event } = req.body;
+
+    if (!projectId || !title || !event || !Array.isArray(event.users) || !Array.isArray(event.schedules)) {
+      return res.status(400).json({ message: 'projectId, title, and event (with users and schedules) are required' });
+    }
+
+    const calendarEntry = new Calendar({
+      projectId,
+      title,
+      event,
+    });
+
+    await calendarEntry.save();
+    res.status(201).json({ message: 'Calendar entry created successfully', calendar: calendarEntry });
+  } catch (error) {
+    console.error('Error creating calendar entry:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+// Get Calendar Entry by Project ID
+
+
+// Get All Calendar Entries
+app.get('/api/calendar', async (req, res) => {
+  try {
+    const calendars = await Calendar.find()
+      .populate('projectId', 'projectName')
+      .populate('event.users.userId', 'name email');
+
+    // Filter out invalid users
+    const cleanedCalendars = calendars.map((calendar) => {
+      calendar.event.users = calendar.event.users.filter((u) => u.userId !== null);
+      return calendar;
+    });
+
+    res.status(200).json(cleanedCalendars);
+  } catch (error) {
+    console.error('Error fetching all calendars:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+// Update Calendar Entry by Project ID
+// Update Calendar Entry by Project ID
+// In server.js
+
+app.put('/api/calendar/project/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  const { event } = req.body;
+
+  try {
+    // Deduplicate users by userId
+    const userMap = new Map();
+    (event.users || []).forEach(user => {
+      userMap.set(user.userId.toString(), {
+        userId: user.userId,
+        role: user.role,
+      });
+    });
+    const uniqueUsers = Array.from(userMap.values());
+
+    // Update calendar with deduplicated users
+    const updatedCalendar = await Calendar.findOneAndUpdate(
+      { projectId },
+      {
+        $set: {
+          'event.users': uniqueUsers,
+          'event.schedules': event.schedules || [],
+        },
+      },
+      { new: true, upsert: true } // Create if it doesn't exist
+    );
+
+    res.json(updatedCalendar);
+  } catch (error) {
+    console.error('Error updating calendar:', error);
+    res.status(500).json({ message: 'Server error while updating calendar' });
+  }
+});
+
+// NEW: Get Calendar Entry by Project ID
+app.get('/api/calendar/project/:projectId', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID' });
+    }
+
+    const calendar = await Calendar.findOne({ projectId })
+      .populate('projectId', 'projectName')
+      .populate('event.users.userId', 'name email');
+
+    if (!calendar) {
+      return res.status(404).json({ message: 'Calendar entry not found for this project' });
+    }
+
+    // Filter out any invalid user references
+    calendar.event.users = calendar.event.users.filter(u => u.userId !== null);
+
+    res.status(200).json(calendar);
+  } catch (error) {
+    console.error('Error fetching calendar by project:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+// Existing: Get Calendar Events for a User
+app.get('/api/calendar/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
+    const calendars = await Calendar.find({ "event.users.userId": userId })
+      .populate('projectId', 'projectName')
+      .populate('event.users.userId', 'name email');
+
+    // Filter out invalid users
+    const cleanedCalendars = calendars.map(calendar => {
+      calendar.event.users = calendar.event.users.filter(u => u.userId !== null);
+      return calendar;
+    });
+
+    // Always return an array, even if empty (no 404)
+    res.status(200).json(cleanedCalendars);
+  } catch (error) {
+    console.error('Error fetching user calendar events:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
 
 
 // Root Route
@@ -1931,4 +2129,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
+
+
 
