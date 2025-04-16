@@ -50,7 +50,7 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'shameem@qaitas.com', // Replace with your email
-    pass: 'itlckoqaiqatuieg',    // Replace with your App Password (not regular password)
+    pass: 'jtjgufyuftoozjtz ',    // Replace with your App Password (not regular password)
   },
 });
 
@@ -954,7 +954,7 @@ app.post('/api/tests', upload.none(), async (req, res) => {
     if (!project.testId) project.testId = newTest._id;
     await project.save();
 
-    res.status(201).json({ message: 'Test created successfully', test: newTest });
+    res.status(201).json({ message: 'Activity created successfully', test: newTest });
   } catch (error) {
     console.error('Error in POST /tests:', error);
     res.status(400).json({ message: error.message });
@@ -1239,10 +1239,16 @@ app.put('/api/notifications/:notificationId/reject', async (req, res) => {
 });
 
 // Get Notifications for a User
+// In server.js, replace the existing /api/notifications/:userId endpoint
 app.get('/api/notifications/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const notifications = await Notification.find({ recipientId: userId }).populate('projectId', 'projectName');
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+    const notifications = await Notification.find({ recipientId: userId })
+      .populate('projectId', 'projectName')
+      .sort({ createdAt: -1 }); // Add sorting
     res.status(200).json(notifications);
   } catch (error) {
     console.error('Error fetching notifications:', error);
@@ -1395,6 +1401,53 @@ app.put('/api/tests/:id/leave', async (req, res) => {
   }
 });
 
+// Add this after the /api/tests/:id/leave endpoint in server.js
+app.put('/api/tests/:testId/stop-timer', async (req, res) => {
+  try {
+    const { testId } = req.params;
+    const { candidateId } = req.body;
+
+    // Validate input
+    if (!mongoose.Types.ObjectId.isValid(testId)) {
+      return res.status(400).json({ message: 'Invalid test ID' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(candidateId)) {
+      return res.status(400).json({ message: 'Invalid candidate ID' });
+    }
+
+    // Find the test
+    const test = await Test.findById(testId);
+    if (!test) {
+      return res.status(404).json({ message: 'Test not found' });
+    }
+
+    // Find the attendee
+    const attendee = test.attendees.find(
+      (att) => (att.candidate._id || att.candidate).toString() === candidateId
+    );
+    if (!attendee) {
+      return res.status(404).json({ message: 'Candidate not found in test attendees' });
+    }
+
+    // Check if timer is already stopped
+    if (attendee.timerStopped) {
+      return res.status(400).json({ message: 'Timer is already stopped for this candidate' });
+    }
+
+    // Update timer status
+    attendee.timerStopped = true;
+    attendee.remainingTime = 0; // Reset remaining time
+    await test.save();
+
+    res.status(200).json({ message: 'Timer stopped successfully' });
+  } catch (error) {
+    console.error('Error stopping timer:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+
+
 
 // Updated Send Invitations Endpoint
 app.post('/api/register', upload.single('cv'), async (req, res) => {
@@ -1496,13 +1549,11 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
         throw new Error(`Schedule at index ${index} is missing eventDate or eventTime`);
       }
 
-      // Ensure eventDate is a string in "YYYY-MM-DD" format
       const dateStr = typeof eventDate === 'string' ? eventDate : eventDate.toString().slice(0, 10);
       if (!moment(dateStr, 'YYYY-MM-DD', true).isValid()) {
         throw new Error(`Invalid eventDate format at index ${index}: ${eventDate}`);
       }
 
-      // Ensure eventTime is a string in "HH:mm" format
       if (!moment(eventTime, 'HH:mm', true).isValid()) {
         throw new Error(`Invalid eventTime format at index ${index}: ${eventTime}`);
       }
@@ -1560,14 +1611,41 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
         continue;
       }
 
+      // Check for existing notification
       if (!resend) {
-        const existingNotification = await Notification.findOne({
+        const existingNotifications = await Notification.find({
           recipientId: user._id,
           projectId,
           status: { $in: ['pending', 'sent'] },
         });
-        if (existingNotification) {
-          console.log(`Notification exists for ${user.email}, skipping`);
+
+        // Check if any existing notification has the same schedules
+        let hasMatchingSchedules = false;
+        for (const existingNotification of existingNotifications) {
+          const existingSchedules = existingNotification.schedules.map(s => ({
+            eventDate: moment(s.eventDate).format('YYYY-MM-DD'),
+            eventTime: s.eventTime,
+          }));
+          const newSchedules = formattedSchedules.map(s => ({
+            eventDate: s.eventDate,
+            eventTime: s.eventTime,
+          }));
+
+          // Check if schedules are identical
+          const schedulesMatch = existingSchedules.length === newSchedules.length &&
+            existingSchedules.every((es, i) =>
+              es.eventDate === newSchedules[i].eventDate &&
+              es.eventTime === newSchedules[i].eventTime
+            );
+
+          if (schedulesMatch) {
+            hasMatchingSchedules = true;
+            console.log(`Notification with same schedules exists for ${user.email}, skipping`);
+            break;
+          }
+        }
+
+        if (hasMatchingSchedules) {
           continue;
         }
       }
@@ -1583,6 +1661,7 @@ app.post('/api/projects/:projectId/send-invitations', async (req, res) => {
           eventTime: s.eventTime,
         })),
         status: 'pending',
+        role: invitee.role,
       });
       await notification.save();
 
@@ -1786,17 +1865,46 @@ app.post('/api/questions/marks', async (req, res) => {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Verify assessor authorization (optional)
+    // Verify assessor authorization
     const isAssessor = project.groups.some(group => group.assessor.toString() === userId);
     if (!isAssessor) {
       return res.status(403).json({ message: 'Unauthorized: Not an assessor for this project' });
+    }
+
+    // Normalize and validate marks based on scoring mechanism
+    const scoringMechanism = project.scoringMechanism || 'normal';
+    const normalizedMarks = {};
+    for (const questionId in marks) {
+      normalizedMarks[questionId] = {};
+      for (const candidateId in marks[questionId]) {
+        let mark = marks[questionId][candidateId];
+        if (scoringMechanism === 'normal') {
+          // Convert boolean to number (true -> 1, false -> 0)
+          if (typeof mark !== 'boolean') {
+            return res.status(400).json({ message: 'Marks must be boolean for normal scoring' });
+          }
+          normalizedMarks[questionId][candidateId] = mark ? 1 : 0;
+        } else if (scoringMechanism === 'weighted3') {
+          mark = parseInt(mark);
+          if (isNaN(mark) || mark < 0 || mark > 3) {
+            return res.status(400).json({ message: 'Marks must be integers between 0 and 3 for weighted3 scoring' });
+          }
+          normalizedMarks[questionId][candidateId] = mark;
+        } else if (scoringMechanism === 'weighted5') {
+          mark = parseInt(mark);
+          if (isNaN(mark) || mark < 0 || mark > 5) {
+            return res.status(400).json({ message: 'Marks must be integers between 0 and 5 for weighted5 scoring' });
+          }
+          normalizedMarks[questionId][candidateId] = mark;
+        }
+      }
     }
 
     // Check if marks already exist for this project, skillset, and assessor
     let markDoc = await Marks.findOne({ projectId, skillsetId, assessorId: userId });
     if (markDoc) {
       // Update existing marks
-      markDoc.marks = marks;
+      markDoc.marks = normalizedMarks;
       markDoc.updatedAt = Date.now();
     } else {
       // Create new marks document
@@ -1804,7 +1912,7 @@ app.post('/api/questions/marks', async (req, res) => {
         projectId,
         skillsetId,
         assessorId: userId,
-        marks,
+        marks: normalizedMarks,
       });
     }
 
@@ -1812,7 +1920,7 @@ app.post('/api/questions/marks', async (req, res) => {
     res.status(200).json({ message: 'Marks saved successfully' });
   } catch (error) {
     console.error('Error saving marks:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 

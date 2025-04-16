@@ -1,12 +1,12 @@
-// Models/Test.js
+// Models/Test.js (already updated)
 const mongoose = require('mongoose');
 
 const TestSchema = new mongoose.Schema({
   testName: { type: String, required: true },
   activityType: { type: String, required: true },
   description: String,
-  date: { type: String, },
-  time: { type: String,  },
+  date: { type: String },
+  time: { type: String },
   prepare: { type: Number, required: true }, // Preparation time in minutes
   present: { type: Number, required: true },
   require: { type: String, required: true },
@@ -15,8 +15,9 @@ const TestSchema = new mongoose.Schema({
   attendees: [
     {
       candidate: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      startTime: { type: Date, default: Date.now }, // When they joined
-      remainingTime: { type: Number, default: null } // Remaining time in seconds
+      startTime: { type: Date, default: Date.now },
+      remainingTime: { type: Number, default: null }, // In seconds
+      timerStopped: { type: Boolean, default: false },
     },
   ],
   attended: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
